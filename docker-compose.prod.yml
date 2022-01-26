@@ -1,0 +1,93 @@
+version: '3.7'
+
+services:
+  web:
+    build:
+      context: ./
+      dockerfile: Dockerfile.prod
+    restart: always
+    command: >
+      sh -c "python manage.py collectstatic --noinput &&
+             python manage.py migrate &&
+             gunicorn server.wsgi:application --bind 0.0.0.0:8000"
+    volumes:
+      - static_volume:/home/app/web/staticfiles
+    ports:
+      - 8000:8000
+    env_file:
+      - ./.env.prod
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13.0-alpine
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+#    env_file:
+#      - ./.env.prod.db
+    environment:
+      - POSTGRES_USER=user_prod
+      - POSTGRES_PASSWORD=pass_prod
+      - POSTGRES_DB=server_prod
+
+  nginx:
+    build: ./nginx
+    restart: always
+    volumes:
+      - static_volume:/home/app/web/staticfiles
+    ports:
+      - 80:80
+    depends_on:
+      - web
+
+  redis:
+    image: redis
+    restart: always
+    volumes:
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    ports:
+      - 6379:6379
+
+  celery-worker1:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: celery-worker1
+    image: madefire/chordtest
+    hostname: worker1
+    env_file:
+      - ./.env.prod
+    command: ['celery', '-A', 'server.celery.app', 'worker', '-l', 'info']
+    volumes:
+      - ./:/code
+      - /etc/localtime:/etc/localtime:ro
+    links:
+      - redis
+    depends_on:
+      - redis
+      - web
+
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    container_name: celery-beat
+    image: madefire/chordtest
+    hostname: beat
+    env_file:
+      - ./.env.prod
+    command: ['celery', '-A', 'server.celery.app', 'beat', '-l', 'info']
+    volumes:
+      - ./:/code
+      - /etc/localtime:/etc/localtime:ro
+    links:
+      - redis
+    depends_on:
+      - redis
+      - web
+
+volumes:
+  postgres_data:
+  static_volume:
